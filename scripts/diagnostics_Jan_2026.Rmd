@@ -1,0 +1,1077 @@
+---
+title: "Post Model-Fitting Diagnostics"
+date: "2026-01-09"
+author: "David Wolfson"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+    theme: sandstone 
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Objective: This document is to evaluate the output of 1,000 model runs of simulated true parameters and fitted model estimates.
+
+Model context:
+The model being run is a stage-based Leftkovich formulation of a Burnham joint live-encounter model with 3 stages. Only 2 stages can be recognized at
+the time of banding (juvenile and adult), and we are inferring a 3rd stage (subadult) using a latent parameter (pi), which is the proportion of marked
+adults that are actually subadults at time of banding. Pi has annual variation over the 20 year dataset.
+
+Diagnostic results include:
+- Rhat values  
+- Bias estimates (truth minus estimated parameter values) 
+- Precision estimates (coverage of credible intervals summarized across sampling runs vs truth)
+- RMSE (mainly accuracy but also considers precision)
+
+Changes from previous diagnostic documents:
+- pi varies annually in the current model version
+- calculated brownie's f (harvest index) directly during each model run
+ 
+
+```{r, message=F, warning=F}
+library(tidyverse)
+library(here)
+library(gridExtra)
+library(patchwork)
+```
+
+### First, compile a dataset of all the true parameters simulated for each model run
+
+All the file paths to saved RDS files.
+
+```{r}
+truth_files<-list.files(path=here("output/MSI_output/Jan_2026_lefkovitch/true_params"), pattern="*.rds", full.names = T)
+```
+
+Function to pull in all the saved RDS files and grab all the relevant information. 
+
+```{r}
+process_simulation_outputs <- function(paths) {
+  # Extract the first integer sequence in the filename
+  extract_run_number <- function(path) {
+    as.integer(str_extract(basename(path), "\\d+"))
+  }
+  
+  # Read all sims into a list of lists, keeping track of each simulation run number
+  sims <- map(paths, ~{
+    list(run = extract_run_number(.x),
+         data = readRDS(.x))
+  })
+  
+  # There are two kinds of simulated parameters: vectors, such as s, p, etc, which have 3 values, one for each age class,
+  # and also the year-specific mu values, such as p.mu, s.mu, which are 3x20 matrices
+  
+  # Process 1D named vectors
+  process_vector <- function(param) {
+    map_dfr(sims, ~ tibble(
+      run   = .x$run,                       # keep track of simulation run number
+      index = seq_along(.x$data[[param]]),  # index represents age class (1=HY, 2=SY, 3=ASY)
+      value = .x$data[[param]],             # actual truth value
+      param = param                         # parameter name
+    ))
+  }
+  
+  # Process 2D matrices (make unique col names first)
+  process_matrix <- function(param) {
+    map_dfr(sims, function(sim) {
+      mat <- sim$data[[param]]   # extract the matrix for the parameter of interest
+      df  <- as.data.frame(mat)  # convert to a data frame
+      
+      colnames(df) <- paste0("V", seq_len(ncol(df))) # give them guaranteed unique names V1…Vn
+      df %>%
+        mutate(row = row_number()) %>%  # add row number as a column
+        pivot_longer(                   # convert from wide to long format
+          cols        = starts_with("V"),
+          names_to    = "col",           # year number as col (i.e. column number from matrix)
+          values_to   = "value"          # actual truth value
+        ) %>%
+        mutate(
+          col   = as.integer(str_remove(col, "V")),     # add on year number as col variable
+          run   = sim$run,                              # add simulation run number
+          param = param                                 # add parameter name
+        ) %>%
+        select(run, row, col, value, param)
+    })
+  }
+  
+  # specify which parameters are vectors vs. matrices
+  vector_params <- c("s.mu","s.sd","F.mu","F.sd","r.mu","r.sd","p.mu","p.sd","pi", "pi.mu", "pi.sd", "g", "g.mu", "g.sd") # pi.mu, pi.sd, g.mu, g.sd don't vary by stage (same value repeated) and have a static value across years, but still ok to grab
+  matrix_params <- c("s","F","r","p") # f not present because it's derived, not simulated
+  
+  # build the result list
+  results <- list()
+  for (p in vector_params) results[[p]] <- process_vector(p)
+  for (p in matrix_params) results[[p]] <- process_matrix(p)
+  
+  results
+}
+```
+
+
+
+Extract info from rds file and combine everything into a list separated by parameter names.
+```{r}
+true_parameters<-process_simulation_outputs(truth_files)
+```
+
+### Now extract estimated model parameters from a csv saved from each model run.
+
+Grab file paths.
+```{r}
+model_summary_files<-list.files(path=here("output/MSI_output/Jan_2026_lefkovitch/model_results"),
+                                pattern="model_summary_simulation_run_.*\\.csv", 
+                                full.names = T)
+```
+
+Function to import data separated by run number and parameter names.
+```{r}
+read_func<-function(paths){
+  # Helper: extract the first integer sequence in the filename
+  run_number<-as.integer(str_extract(basename(paths), "\\d+"))
+  
+  # read in csv file
+  out<-read_csv(paths)
+  
+  
+  # add in parameter names
+  out<-data.frame(run=rep(run_number, nrow(out)), out)
+}
+```
+
+
+Combine estimated model parameter values. (as_tibble output suppressed)
+```{r, include=F}
+model_df<-map_dfr(model_summary_files, read_func) %>% 
+  as_tibble()
+```
+
+---
+
+### Check R-hat values
+This shows the relative convergence of all parameters.
+```{r}
+df<-model_df %>% 
+  mutate(param_category=str_extract(param, "^[^\\[]+"),
+         index=as.integer(str_extract(param, "(?<=\\[)\\d+(?=\\])")))
+
+ggplot(df, aes(param_category, Rhat))+
+  geom_boxplot(outliers = F)+
+  geom_hline(yintercept=1.05, color="red")+
+  labs(x="parameters")+
+  theme_minimal()
+#ggsave(plot=rhats, here("figures/rhats.jpg"), dpi=600)
+
+
+# Table version
+
+# df %>% 
+#   group_by(param_category) %>% 
+#   summarise(
+#       mean_rhat = mean(Rhat, na.rm = TRUE),
+#     sd_rhat = sd(Rhat, na.rm = TRUE),
+#     quant_2.5=quantile(Rhat, prob=0.025),
+#     quant_97.5=quantile(Rhat, prob=0.975)
+#   )
+```
+
+
+---
+
+## Coverage
+Defined as the probability that the 95% CI from the fitted model parameter contains the true simulated value.
+
+### Data-wrangling for coverage estimation
+
+First get all the true parameters out of the big combined list and into separate dimension dataframes to compare.
+True model parameters
+```{r}
+scalar_params <- c("pi.mu", "pi.sd", "g.mu", "g.sd") 
+vector_params <- c("s.mu","s.sd","F.mu","F.sd","r.mu","r.sd","p.mu","p.sd", "pi", "g")
+matrix_params <- c("s","F","r","p")
+```
+
+
+Get a logical index of names to filter from.
+```{r}
+vec_names<-names(true_parameters)%in%vector_params
+matrix_names<-names(true_parameters)%in%matrix_params
+scalar_names<-names(true_parameters)%in%scalar_params
+```
+
+Split up big single list of true parameters into categories of scalars, vectors, and matrices.
+```{r}
+true_vec_list <- true_parameters[vec_names]
+truth_matrix_list <- true_parameters[matrix_names]
+truth_scalars<-true_parameters[scalar_names]
+```
+
+
+Hypers for pi and g don't have 3 separate indices for stage, and don't vary by year, just a single value per run
+```{r}
+truth_scalars_df<-bind_rows(truth_scalars, .id="param")%>%
+  rename(truth = value)
+```
+
+There are 2 different sets of dimensions to the vector parameters. 
+Hyperpriors for the parameters that vary by stage are 3x1 vectors, with the 'index' variable keeping track of stage.
+The parameters for 'g' and 'pi' are 20x1 vectors, with the 'index' variable keeping track of year.
+
+ 
+It probably makes sense to keep index only as a variable for the different stages, and only use year for time-varying parameters.
+
+First I'll parse out the hyperpriors that only vary by stage.
+```{r}
+hyper_vec_list<-c("s.mu","s.sd","F.mu","F.sd","r.mu","r.sd","p.mu","p.sd")
+
+truth_hyper_vec_df<-bind_rows(true_vec_list, .id="param") %>% 
+  filter(param%in%hyper_vec_list) %>% 
+  rename(truth = value) %>% 
+  mutate(year=NA) # so that everything can have a year column eventually
+```
+
+Now only by year. I'll rename index to year (because that is what it's representing), and give it another variable called index that is NA for record-keeping.
+```{r}
+yearly_vec_list<-c("pi", "g")
+
+truth_year_vec_df<-bind_rows(true_vec_list, .id="param") %>% 
+  filter(param%in%yearly_vec_list) %>% 
+  rename(truth = value) %>% 
+  rename(year=index) %>% 
+  mutate(index=NA)
+```
+
+Combine the two kinds of vector parameters
+```{r}
+truth_vec_df<-bind_rows(truth_hyper_vec_df, truth_year_vec_df)
+```
+
+
+Parameters with 3x20 matrix for age variation plus temporal variation (20 years)
+```{r}
+truth_matrix_df<-bind_rows(truth_matrix_list, .id="param") %>% 
+  rename(index=row, year=col, truth=value)
+```
+
+---
+
+#### Now join together the combinations of true and estimated parameters
+
+Model estimates for vector parameters
+
+I'll follow the same process as before for breaking up the 3x1 vectors and 20x1 vectors and accounting for index vs year.
+
+```{r}
+est_hyper_vec_df <- model_df %>%
+  mutate(
+    index = as.integer(str_extract(param, "(?<=\\[)\\d+")),  # extract the number inside the brackets
+    param = str_extract(param, "^[^\\[]+")   # grab the text before the left bracket
+  ) %>%
+  filter(param %in%hyper_vec_list) %>%
+  select(run, param, index, mean, sd, X2.5., X50., X97.5., Rhat, n.eff) %>% 
+  mutate(year=NA)
+
+est_yearly_vec_df <- model_df %>% 
+   mutate(
+    index = as.integer(str_extract(param, "(?<=\\[)\\d+")),  # extract the number inside the brackets
+    param = str_extract(param, "^[^\\[]+")   # grab the text before the left bracket
+  ) %>%
+  filter(param %in%yearly_vec_list) %>%
+  select(run, param, index, mean, sd, X2.5., X50., X97.5., Rhat, n.eff) %>% 
+  rename(year=index) %>% 
+  mutate(index=NA)
+
+est_vec_df<-bind_rows(est_hyper_vec_df, est_yearly_vec_df)
+```
+
+Scalar pi parameters. They don't vary by year or stage, single value per run.
+Probably makes more sense to code index as NA, since the scalars are for all stages instead of a single one, than give it a numeric value.
+```{r}
+# estimated
+scalar_est<-model_df %>% 
+  filter(param%in%scalar_params)
+
+# combine with true
+comp_scalar<-scalar_est %>% 
+  left_join(truth_scalars_df %>% 
+              select(run, param, truth),
+            by=c("run", "param")) %>% 
+  mutate(index=NA) %>% 
+  select(run, param, index, mean, sd, X2.5., X50., X97.5., Rhat, n.eff, truth) %>% 
+  mutate(year=NA) %>% 
+  distinct()
+```
+
+
+Scalar (pi) and vector parameters combined
+
+```{r}
+comp_vec <- left_join(est_vec_df, truth_vec_df, by = c("run", "index", "param", "year")) %>% 
+  bind_rows(., comp_scalar) %>% 
+  arrange(run, param, index, year) %>% 
+  select(run, param, index, year, truth, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
+```
+
+
+Pull off indices from jags parameter names
+```{r}
+est_matrix_df<-model_df %>% 
+  extract(
+    col   = param,
+    into  = c("param", "index", "year"),
+    regex = "^([^\\[]+)\\[(\\d+),(\\d+)\\]$",  # first number goes to age index (1-3), second to year value (1-20)
+    convert = TRUE
+  ) %>% 
+  filter(param%in%matrix_params) %>% 
+  select(run, param, index, year, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
+```
+
+
+Add truth values to matrix parameter dataframe
+```{r}
+comp_mat <- left_join(est_matrix_df, truth_matrix_df) %>% 
+  select(run, param, index, year, truth, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
+```
+
+
+Combine full set of truth and estimated to compare
+```{r}
+full_comp<-rbind.data.frame(comp_vec, comp_mat)
+```
+
+
+---
+
+#### Now actually calculate and visualize coverage for hyperparameters, grouped by age index
+
+Add approximate (Wald) CIs via standard error. Since sample size is large it's ok to use normal approximation.
+```{r}
+hypers<-c('F.mu', 'F.sd', 'p.mu', 'p.sd', 'r.mu', 'r.sd', 's.mu', 's.sd', 'pi')
+
+param_coverage_approx <- full_comp %>% 
+  filter(param%in%hypers) %>% 
+  mutate(covered = (truth >= X2.5.) & (truth <= X97.5.)) %>% 
+  group_by(param) %>% 
+  summarise(
+    index = index,
+    coverage = mean(covered),
+    n        = n()
+  ) %>% 
+  mutate(
+    se       = sqrt(coverage * (1 - coverage) / n),
+    ci_lower = coverage - 1.96 * se,
+    ci_upper = coverage + 1.96 * se
+  )
+
+# So as to not jam too much together, I'll make a separate plot for each set of parameters
+
+# give index numbers for age more descriptive labels
+age_labels<-c(
+  "1"="Juvenile",
+  "2"="Subadult",
+  "3"="Adult"
+)
+
+# true survival
+survival_coverage<-param_coverage_approx %>% 
+  filter(param%in%c('s.mu', 's.sd')) %>% 
+ggplot(., aes(param, coverage)) +
+  facet_wrap(~index, labeller=as_labeller(age_labels)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_hline(yintercept = 0.95, color = "red") +
+  theme_minimal()+
+  ggtitle('Coverage of true survival (s) hyperparameters')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text=element_text(size=16),
+        strip.text=element_text(size=16),
+        axis.title.y=element_text(size=16))+
+  labs(x="", y="Coverage\n")
+
+#ggsave(plot=survival_coverage, here("figures/survival_coverage.jpg"), dpi=600)
+
+
+# dead encounter
+recovery_coverage<-param_coverage_approx %>% 
+  filter(param%in%c('r.mu', 'r.sd')) %>% 
+ggplot(., aes(param, coverage)) +
+  facet_wrap(~index, labeller=as_labeller(age_labels)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_hline(yintercept = 0.95, color = "red") +
+  theme_minimal()+
+  ggtitle('Coverage of dead encounter (r) hyperparameters')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text=element_text(size=16),
+        strip.text=element_text(size=16),
+        axis.title.y=element_text(size=16))+
+  labs(x="", y="Coverage\n")
+
+#ggsave(plot=recovery_coverage, here("figures/recovery_coverage.jpg"), dpi=600)
+
+
+
+# # live encounter
+# param_coverage_approx %>% 
+#   filter(param%in%c('p.mu', 'p.sd')) %>% 
+#   filter(index%in%c('2', '3')) %>% 
+# ggplot(., aes(param, coverage)) +
+#   facet_wrap(~index, labeller=as_labeller(age_labels)) +
+#   geom_point() +
+#   geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+#   geom_hline(yintercept = 0.95, color = "red") +
+#   theme_minimal()+
+#   ggtitle('Coverage of live encounter (p) hyperparameters')
+# 
+# 
+# 
+# # site fidelity
+# param_coverage_approx %>% 
+#   filter(param%in%c('F.mu', 'F.sd')) %>% 
+# ggplot(., aes(param, coverage)) +
+#   facet_wrap(~index, labeller=as_labeller(age_labels)) +
+#   geom_point() +
+#   geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+#   geom_hline(yintercept = 0.95, color = "red") +
+#   theme_minimal()+
+#   ggtitle('Coverage of site fidelity (F) hyperparameters')
+
+# finite mixture models
+pi_coverage<-param_coverage_approx %>% 
+  filter(param=='pi') %>% 
+ggplot(., aes(param, coverage)) +
+  facet_wrap(~index, labeller=as_labeller(age_labels)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_hline(yintercept = 0.95, color = "red") +
+  theme_minimal()+
+  ggtitle('Coverage of pi parameters')
+
+ggsave(plot=pi_coverage, here("figures/pi_coverage.jpg"), dpi=600)
+
+```
+---
+
+## Plot bias (truth minus estimates)
+
+I'll first show my methods for a single parameter and then wrap everything in a function and visualize multiple parameters at the same time.
+
+
+
+
+```{r, eval=F}
+# Pull survival from truth
+s.mu_truth<-true_parameters$s.mu %>%
+  select(run, index, value) %>%
+  rename(truth=value)
+
+# Pull survival from model estimates
+model_df_clean <- model_df %>%
+  mutate(
+    index = as.integer(str_extract(param, "(?<=\\[)\\d+")),  # extract index before modifying param
+    param = str_extract(param, "^[^\\[]+")                   # extract base parameter name
+  )
+
+# Combine and calculate bias
+s.mu_est<-model_df_clean %>%
+  filter(param=="s.mu") %>%
+  select(run, index, mean, sd)
+
+s.mu_comp<-left_join(s.mu_est, s.mu_truth)
+
+s.mu_comp<-s.mu_comp %>%
+  mutate(bias=plogis(mean)-plogis(truth),
+         rmse=sqrt(sd^2)+bias^2)
+
+# Example for calculating 95% CI of bias across runs and visualizing 
+ci_emp<-s.mu_comp %>%
+  group_by(index) %>%
+  summarise(
+    lower = quantile(bias, 0.025, na.rm = TRUE),
+    upper = quantile(bias, 0.975, na.rm = TRUE)
+  )
+
+# bias
+ggplot(s.mu_comp, aes(x = factor(index), y = bias)) +
+  geom_violin(trim = FALSE, fill = "lightgreen") +
+  geom_linerange(
+    data = ci_emp,
+    inherit.aes = F,
+    aes(x = factor(index), ymin = lower, ymax = upper),
+    color = "darkgreen", linewidth = 1
+  ) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 3.5) +
+  geom_hline(yintercept = 0, color="red")+
+  labs(title = "Bias violin plots with 2.5% and 97.5% quantiles",
+       x = "Age class (index)", y = "Bias") +
+  theme_minimal()+
+  scale_x_discrete(labels=c("HY", "SY", "ASY"))
+
+# now for rmse
+ci_emp_rmse<-s.mu_comp %>%
+  group_by(index) %>%
+  summarise(
+    lower = quantile(rmse, 0.025, na.rm = TRUE),
+    upper = quantile(rmse, 0.975, na.rm = TRUE)
+  )
+
+
+
+ggplot(s.mu_comp, aes(x = factor(index), y = rmse)) +
+  geom_violin(trim = FALSE, fill = "lightgreen") +
+  geom_linerange(
+    data = ci_emp_rmse,
+    inherit.aes = F,
+    aes(x = factor(index), ymin = lower, ymax = upper),
+    color = "darkgreen", linewidth = 1
+  ) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 3.5) +
+  geom_hline(yintercept = 0, color="red")+
+  labs(title = "RMSE violin plots with 2.5% and 97.5% quantiles",
+       x = "Age class (index)", y = "RMSE") +
+  theme_minimal()+
+  scale_x_discrete(labels=c("HY", "SY", "ASY"))
+
+
+```
+
+
+#### Now everything together. First as a function to recreate all the above steps, and then with an additional wrapper to simultaneously do the same thing for multiple parameters at the same time.
+
+One parameter function
+```{r}
+plot_bias_violin_one <- function(param_name, model_df, true_parameters) {
+  truth_df <- true_parameters[[param_name]] %>%
+    select(run, index, value) %>%
+    rename(truth = value)
+  
+  est_df <- model_df %>%
+    mutate(
+      index = as.integer(str_extract(param, "(?<=\\[)\\d+")),
+      param = str_extract(param, "^[^\\[]+")
+    ) %>%
+    filter(param == param_name) %>%
+    select(run, index, mean, sd, X2.5., X97.5.)
+  
+  comp_df <- left_join(est_df, truth_df, by = c("run", "index")) %>%
+    mutate(bias = plogis(mean) - plogis(truth),
+         rmse=sqrt(sd^2+bias^2))
+  
+  ci_emp <- comp_df %>%
+    group_by(index) %>%
+    summarise(
+      lower = quantile(bias, 0.025, na.rm = TRUE),
+      upper = quantile(bias, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  ggplot(comp_df, aes(x = factor(index), y = bias)) +
+    geom_violin(trim = T, fill = "lightgreen", color=NA) +
+    geom_linerange(
+      data        = ci_emp,
+      inherit.aes = FALSE,
+      aes(x = factor(index), ymin = lower, ymax = upper),
+      linewidth   = 1.2,
+      color       = "darkgreen"
+    ) +
+    stat_summary(fun = median, geom = "point", color = "black", size = 3) +
+    geom_hline(yintercept = 0, color = "red") +
+    labs(
+      title = paste0("Bias for ‘", param_name, "’"),
+      x     = "Age class",
+      y     = "Bias"
+    ) +
+    theme_minimal()+
+    theme(plot.title=element_text(hjust=0.5),
+          axis.text.x=element_text(size=16))+
+      scale_x_discrete(labels=c("HY", "SY", "ASY"))  # this will make an error when HY p is taken out, but otherwise it's more convenient
+}
+
+plot_rmse_violin_one<- function(param_name, model_df, true_parameters) {
+  truth_df <- true_parameters[[param_name]] %>%
+    select(run, index, value) %>%
+    rename(truth = value)
+  
+  est_df <- model_df %>%
+    mutate(
+      index = as.integer(str_extract(param, "(?<=\\[)\\d+")),
+      param = str_extract(param, "^[^\\[]+")
+    ) %>%
+    filter(param == param_name) %>%
+    select(run, index, mean, sd)
+  
+  comp_df <- left_join(est_df, truth_df, by = c("run", "index")) %>%
+    mutate(bias = plogis(mean) - plogis(truth),
+         rmse=sqrt(sd^2)+bias^2)
+  
+  ci_emp_rmse <- comp_df %>%
+    group_by(index) %>%
+    summarise(
+      lower = quantile(rmse, 0.025, na.rm = TRUE),
+      upper = quantile(rmse, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  ggplot(comp_df, aes(x = factor(index), y = rmse)) +
+  geom_violin(trim = T, fill = "lightgreen", color=NA) +
+  geom_linerange(
+    data = ci_emp_rmse,
+    inherit.aes = F,
+    aes(x = factor(index), ymin = lower, ymax = upper),
+    color = "darkgreen", linewidth = 1.2
+  ) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 3) +
+    geom_hline(yintercept = 0, color = "red") +
+    labs(
+      title = paste0("RMSE for ‘", param_name, "’"),
+      x     = "Age class",
+      y     = "RMSE"
+    ) +
+    theme_minimal()+
+    theme(plot.title=element_text(hjust=0.5),
+                 axis.text.x=element_text(size=16))+
+      scale_x_discrete(labels=c("HY", "SY", "ASY"))  # this will make an error when HY p is taken out, but otherwise it's more convenient
+}
+
+```
+
+Wrapper for multiple parameters
+```{r}
+plot_bias_violin_grid <- function(param_names, model_df, true_parameters,
+                                  ncol = 2,  # number of columns in the grid
+                                  plot_width = 6, plot_height = 4) {
+  # generate one plot per parameter
+  plot_list <- lapply(param_names, function(p) {
+    plot_bias_violin_one(p, model_df, true_parameters)
+  })
+  
+  # arrange them in a grid
+  grid_obj <- do.call(grid.arrange,
+                      c(plot_list, ncol = ncol))
+  
+  # Return invisibly so that you can capture it if desired
+  invisible(grid_obj)
+}
+
+plot_rmse_violin_grid <- function(param_names, model_df, true_parameters,
+                                  ncol = 2,  # number of columns in the grid
+                                  plot_width = 6, plot_height = 4) {
+  # generate one plot per parameter
+  plot_list <- lapply(param_names, function(p) {
+    plot_rmse_violin_one(p, model_df, true_parameters)
+  })
+  
+  # arrange them in a grid
+  grid_obj <- do.call(grid.arrange,
+                      c(plot_list, ncol = ncol))
+  
+  # Return invisibly so that you can capture it if desired
+  invisible(grid_obj)
+}
+```
+
+
+Vector parameters to compare
+```{r}
+mu_to_plot <- c("s.mu", "F.mu", "p.mu", "r.mu")
+sd_to_plot <- c("s.sd", "F.sd", "p.sd", "r.sd")
+
+reduced_mus<- c("s.mu", "r.mu")
+```
+
+Produce 2-column grid of the plots. The black dot in each figure is the median value and the dark green vertical line is the range of the 2.5% and 97.5% quantiles across simulation runs"
+```{r}
+# first exclude p1 since it isn't being estimated
+df_filter<-model_df %>% 
+  filter(!param%in%c('p.mu[1]', 'p.sd[1]'))
+
+
+plot_bias_violin_grid(mu_to_plot, df_filter, true_parameters, ncol = 2)
+plot_bias_violin_grid(sd_to_plot, df_filter, true_parameters, ncol = 2)
+
+plot_rmse_violin_grid(mu_to_plot, df_filter, true_parameters, ncol = 2)
+# I don't think it's appropriate/needed to plot rmse for sd
+
+reduced_mu_bias_plot<-plot_bias_violin_grid(reduced_mus, df_filter, true_parameters, ncol = 2)
+ggsave(plot=reduced_mu_bias_plot, here("figures/reduced_mu_bias_plot.jpg"), dpi=600)
+
+reduced_mu_rmse_plot<-plot_rmse_violin_grid(reduced_mus, df_filter, true_parameters, ncol = 2)
+ggsave(plot=reduced_mu_rmse_plot, here("figures/reduced_mu_rmse_plot.jpg"), dpi=600)
+
+# grid version doesn't line up the y=0 line in the plots, which is weird.
+# it's probably better to keep the bias and rmse for parameters together, so I'll call the single plot functions and then put plots together with cowplot or patchwork
+
+
+s_bias<-plot_bias_violin_one('s.mu', df_filter, true_parameters)
+s_rmse<-plot_rmse_violin_one('s.mu', df_filter, true_parameters)
+surv_plots<-s_bias+s_rmse
+ggsave(plot=surv_plots, here("figures/survival_bias_rmse.jpg"), dpi=600)
+
+r_bias<-plot_bias_violin_one('r.mu', df_filter, true_parameters)
+r_rmse<-plot_rmse_violin_one('r.mu', df_filter, true_parameters)
+recovery_plots<-r_bias+r_rmse
+ggsave(plot=recovery_plots, here("figures/recovery_bias_rmse.jpg"), dpi=600)
+
+
+```
+
+
+---
+
+#### Now do something similar for the 3x20 matrix parameters
+
+First a function to summarize bias and quantiles
+```{r}
+summarise_matrix_bias <- function(param_name, model_df, true_parameters) {
+  df_mat <- model_df %>%
+    # only keep rows like "s[1,1]" if param_name=="s"
+    filter(str_detect(param, paste0("^", param_name, "\\["))) %>%
+    extract(
+      col     = param,
+      into    = c("param_name", "row", "col"),
+      regex   = "^(\\w+)\\[(\\d+),(\\d+)\\]$",
+      convert = TRUE
+    ) %>%
+    select(run, row, col, mean)
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    rename(row = row, col = col, truth = value)
+  
+  comp <- df_mat %>%
+    left_join(truth_df, by = c("run","row","col")) %>%
+    mutate(bias = mean - truth)
+  
+  ci <- comp %>%
+    group_by(row, col) %>%
+    summarise(
+      lower = quantile(bias, 0.025, na.rm = TRUE),
+      upper = quantile(bias, 0.975, na.rm = TRUE),
+      med   = median(bias,    na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  list(comp = comp, ci = ci)
+}
+
+summarise_matrix_rmse <- function(param_name, model_df, true_parameters) {
+  df_mat <- model_df %>%
+    # only keep rows like "s[1,1]" if param_name=="s"
+    filter(str_detect(param, paste0("^", param_name, "\\["))) %>%
+    extract(
+      col     = param,
+      into    = c("param_name", "row", "col"),
+      regex   = "^(\\w+)\\[(\\d+),(\\d+)\\]$",
+      convert = TRUE
+    ) %>%
+    select(run, row, col, mean, sd)
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    rename(row = row, col = col, truth = value)
+  
+  comp <- df_mat %>%
+    left_join(truth_df, by = c("run","row","col")) %>%
+    mutate(bias = mean - truth,
+         rmse=sqrt(sd^2+bias^2))
+  
+  ci <- comp %>%
+    group_by(row, col) %>%
+    summarise(
+      lower = quantile(rmse, 0.025, na.rm = TRUE),
+      upper = quantile(rmse, 0.975, na.rm = TRUE),
+      med   = median(rmse,    na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  list(comp = comp, ci = ci)
+}
+```
+
+
+
+Violin plot style function
+```{r}
+plot_matrix_violins_bias <- function(param_name, model_df, true_parameters,
+                                ncol = 3 # how many cols of facets
+) {
+  out  <- summarise_matrix_bias(param_name, model_df, true_parameters)
+  comp <- out$comp
+  ci   <- out$ci
+  
+  ggplot(comp, aes(x = factor(col), y = bias)) +
+    geom_violin(trim = T, fill = "lightblue", color=NA) +
+    stat_summary(fun = median, geom = "point", color = "black", size = 2) +
+    geom_linerange(
+      data        = ci,
+      inherit.aes = FALSE,
+      aes(x = factor(col), ymin = lower, ymax = upper),
+      linewidth   = .4, color = "darkblue"
+    ) +
+    geom_hline(yintercept = 0, color = "red") +
+    scale_x_discrete(breaks=c(1,5,10,15,20), 
+                       labels=c('1', '5', '10', '15', '20'))+
+    facet_wrap(~ row, ncol = ncol, labeller=as_labeller(age_labels)) +
+    labs(
+      title = paste0("Bias of ‘", param_name, "' by age class and year"),
+      x     = "Year",
+      y     = "Bias"  # could also add more detail with: "(mean – truth)"
+    ) +
+    theme_minimal()
+}
+
+plot_matrix_violins_rmse <- function(param_name, model_df, true_parameters,
+                                     ncol=3) {
+  out  <- summarise_matrix_rmse(param_name, model_df, true_parameters)
+  comp <- out$comp
+  ci   <- out$ci
+  
+  ggplot(comp, aes(x = factor(col), y = rmse)) +
+    geom_violin(trim = T, fill = "lightblue", color=NA) +
+    stat_summary(fun = median, geom = "point", color = "black", size = 2) +
+    geom_linerange(
+      data        = ci,
+      inherit.aes = FALSE,
+      aes(x = factor(col), ymin = lower, ymax = upper),
+      linewidth   = 0.4, color = "darkblue"
+    ) +
+    geom_hline(yintercept = 0, color = "red") +
+        scale_x_discrete(breaks=c(1,5,10,15,20), 
+                       labels=c('1', '5', '10', '15', '20'))+
+    facet_wrap(~ row, ncol = ncol, labeller=as_labeller(age_labels)) +
+    labs(
+      title = paste0("RMSE of ‘", param_name, "’ by age class and year"),
+      x     = "Year",
+      y     = "RMSE"  # to add the equation for RMSE use: bquote("RMSE" ~ sqrt(bias^2+variance^2))
+    ) +
+    theme_minimal()
+}
+
+
+
+```
+
+
+
+
+Violin plot for the s (true survival) matrix
+```{r}
+s.yearly.bias<-plot_matrix_violins_bias("s", model_df, true_parameters)
+ggsave(plot=s.yearly.bias, here("figures/yearly_survival_bias.jpg"),
+       dpi=600)
+
+
+
+s.yearly.rmse<-plot_matrix_violins_rmse("s", model_df, true_parameters)
+ggsave(plot=s.yearly.rmse, here("figures/yearly_survival_rmse.jpg"),dpi=600)
+
+yearly_survival_plot<-s.yearly.bias+s.yearly.rmse
+ggsave(plot=yearly_survival_plot, here("figures/yearly_survival_bias_rmse.jpg"), dpi=600)
+
+```
+
+
+
+
+
+Violin plot for the r (dead encounter) matrix
+```{r}
+r.yearly.bias<-plot_matrix_violins_bias("r", model_df, true_parameters)
+ggsave(plot=r.yearly.bias, here("figures/yearly_recovery_bias.jpg"), dpi=600)
+
+r.yearly.rmse<-plot_matrix_violins_rmse("r", model_df, true_parameters)
+ggsave(plot=r.yearly.rmse, here("figures/yearly_recovery_rmse.jpg"), dpi=600)
+```
+
+
+
+Violin plot for the F (site fidelity) matrix
+```{r}
+plot_matrix_violins_bias("F", model_df, true_parameters)
+plot_matrix_violins_rmse("F", model_df, true_parameters)
+```
+
+
+
+
+
+Violin plot for the p (live encounter) matrix
+```{r}
+# params to drop
+p1<-c("p[1,1]", "p[1,2]", "p[1,3]",
+      "p[1,4]", "p[1,5]", "p[1,6]", 
+      "p[1,7]", "p[1,8]", "p[1,9]",
+      "p[1,10]", "p[1,11]", "p[1,12]",
+      "p[1,13]", "p[1,14]", "p[1,15]",
+      "p[1,16]",  "p[1,17]",  "p[1,18]",
+      "p[1,19]", "p[1,20]")
+
+# First a filtered dataset that drops HY p parameters
+p_filt<-model_df %>% 
+  filter(!param%in%p1)
+
+
+plot_matrix_violins_bias("p", p_filt, true_parameters)
+plot_matrix_violins_rmse("p", p_filt, true_parameters)
+```
+
+
+
+Calculate brownie's f (index of harvest rate)
+```{r}
+  
+  # Pull survival from truth
+s.mu_truth<-true_parameters$s.mu %>%
+  select(run, index, value) %>%
+  rename(truth=value) %>% 
+  mutate(true_param="s")
+
+# 'De-index'  model estimates
+model_df_clean <- model_df %>%
+  mutate(
+    index = as.integer(str_extract(param, "(?<=\\[)\\d+")),  # extract index before modifying param
+    param = str_extract(param, "^[^\\[]+")                   # extract base parameter name
+  )
+
+# pull r (dead encounter) from truth
+r.mu_truth<-true_parameters$r.mu %>% 
+  select(run, index, value) %>%
+  rename(truth=value) %>% 
+  mutate(true_param="r")
+
+# calculate true brownie f from simulations
+brownie.mu_truth<-rbind.data.frame(s.mu_truth, r.mu_truth)
+brownie.mu_truth<-brownie.mu_truth %>% 
+  pivot_wider(
+    names_from = true_param,
+    values_from=truth
+  ) %>% 
+  mutate(f_true=(1-s)*r)
+
+
+# Calculate estimated brownie's f
+brownie.mu_est<-model_df_clean %>%
+  filter(param%in%c("s.mu", "r.mu")) %>%
+  select(run, index, param, mean) %>% 
+  pivot_wider(
+    names_from=param,
+    values_from = mean
+  ) %>% 
+  mutate(f_est=(1-s.mu)*r.mu)
+
+brownie.mu_comp<-left_join(brownie.mu_est, brownie.mu_truth)
+
+brownie.mu_comp<-brownie.mu_comp %>%
+  mutate(bias_f=plogis(f_est)-plogis(f_true))
+
+# # Example for calculating 95% CI across runs and visualizing 
+ci_emp<-brownie.mu_comp %>%
+  group_by(index) %>%
+  summarise(
+    lower = quantile(bias_f, 0.025, na.rm = TRUE),
+    upper = quantile(bias_f, 0.975, na.rm = TRUE)
+  )
+
+brownie_f_plot<-ggplot(brownie.mu_comp, aes(x = factor(index), y = bias_f)) +
+  geom_violin(trim = T, fill = "lightgreen", color=NA) +
+  geom_linerange(
+    data = ci_emp,
+    inherit.aes = F,
+    aes(x = factor(index), ymin = lower, ymax = upper),
+    color = "darkgreen", linewidth = 1.2
+  ) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 3) +
+  geom_hline(yintercept = 0, color="red")+
+  labs(title = "Brownie's f (harvest rate)",
+       x = "Age class", y = "Bias") +
+  theme_minimal()+
+  scale_x_discrete(labels=c("HY", "SY", "ASY"))+
+  theme(plot.title = element_text(hjust=0.5),
+                 axis.text.x=element_text(size=14))
+
+ggsave(plot=brownie_f_plot, here("figures/brownie_f_bias.jpg"), dpi=600)
+
+
+
+# ggplot(brownie.mu_comp, aes(x = factor(index), y = bias_f)) +
+#   geom_boxplot(fill = "lightgreen", outliers = F) +
+#   geom_hline(yintercept = 0, color="red")+
+#   labs(title = "Brownie's f (harvest rate)",
+#        x = "Age class", y = "Bias") +
+#   theme_minimal()+
+#   scale_x_discrete(labels=c("HY", "SY", "ASY"))+
+#   theme(plot.title = element_text(hjust=0.5))
+
+```
+
+Run pi separately
+```{r}
+  
+  # Pull pi from truth
+pi_truth<-true_parameters$pi %>%
+  select(run, value) %>%
+  rename(truth=value)
+
+
+# 'De-index'  model estimates
+pi_df_clean <- model_df %>%
+  mutate(
+    index = as.integer(str_extract(param, "(?<=\\[)\\d+")),  # extract index before modifying param
+    param = str_extract(param, "^[^\\[]+")                   # extract base parameter name
+  ) %>% 
+    filter(param=="pi")
+
+
+
+pi_comp<-left_join(pi_df_clean, pi_truth)
+
+pi_comp<-pi_comp %>%
+  mutate(bias=plogis(mean)-plogis(truth))
+
+# # Example for calculating 95% CI across runs and visualizing 
+ci_emp<-pi_comp %>%
+  summarise(
+    lower = quantile(bias, 0.025, na.rm = TRUE),
+    upper = quantile(bias, 0.975, na.rm = TRUE)
+  )
+
+pi_bias_plot<-ggplot(pi_comp, aes(x='', y = bias)) +
+  geom_violin(trim = T, fill = "lightgreen", color=NA) +
+  geom_linerange(
+    data = ci_emp,
+    inherit.aes = F,
+    aes(x='', ymin = lower, ymax = upper),
+    color = "darkgreen", linewidth = 1.2
+  ) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 3) +
+  geom_hline(yintercept = 0, color="red")+
+  labs(title = "Bias in pi parameter",
+       y = "Bias") +
+  theme_minimal()+
+  theme(plot.title = element_text(hjust=0.5),
+                 axis.text.x=element_text(size=14))
+
+ggsave(plot=pi_bias_plot, here("figures/pi_bias.jpg"), dpi=600)
+
+
+
+
+
+```
+
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
