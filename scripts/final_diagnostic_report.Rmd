@@ -14,7 +14,6 @@ editor_options:
   chunk_output_type: console
 ---
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -22,49 +21,55 @@ knitr::opts_chunk$set(echo = TRUE)
 # Document intro
 
 ### Objective:
+
 This document is to evaluate the output of 1,000 model runs of simulated true parameters and fitted model estimates.
 
-### Model context:  
-The model being run is a stage-based Leftkovich formulation of a Burnham joint live-encounter model with 3 stages. The main model parameters are *s* (survival), *F* (fidelity to banding site), *r* (dead recovery, Seber notation), *p* (detection, aka live recap probability).  
+### Model context:
+
+The model being run is a stage-based Leftkovich formulation of a Burnham joint live-encounter model with 3 stages. The main model parameters are *s* (survival), *F* (fidelity to banding site), *r* (dead recovery, Seber notation), *p* (detection, aka live recap probability).
 
 Only 2 stages can be recognized at the time of banding (juvenile and adult), and we are inferring a 3rd stage (subadult) using a latent parameter ($\pi$), which is the proportion of marked adults that are actually subadults at time of banding. Pi has annual variation over the 20 year dataset. The *g* parameter estimates the proportion that stay in subadult stage or graduate to adult, also varying annually. We are directly calculating brownie's f parameter during each model run.
 
-Diagnostic results include the following visualizations:
-- Rhat values    
-- Bias estimates (truth minus estimated parameter values)   
-- Precision estimates (coverage of credible intervals summarized across sampling runs vs truth)  
-- RMSE (mainly accuracy but also considers precision)  
+Diagnostic results include the following visualizations:\
+- Rhat values\
+- Bias estimates (truth minus estimated parameter values)\
+- Precision estimates (coverage of credible intervals summarized across sampling runs vs truth)\
+- RMSE (mainly accuracy but also considers precision)\
+- Observed vs expected values 
 
-### Model parameters 
-There are 18 parameters that we simulated true values for. Twelve of the parameters are hyperpriors, of which there are two types.  
+### Model parameters
 
-1) Scalar hyper-priors that don't vary annually or by stage (although their 'parent' parameter varies by year: 
-- pi.mu
-- pi.sd
-- g.mu
-- g.sd
+There are 18 parameters that we simulated true values for. Twelve of the parameters are hyperpriors, of which there are two types.
 
-2) Vector hyper-priors (1x3 dimensions) that vary by stage (their parents vary by stage and year):
-- s.mu
-- s.sd
-- F.mu
-- F.sd
-- r.mu
-- r.sd
-- p.mu
-- p.sd
+1)  Scalar hyper-priors that don't vary annually or by stage (although their 'parent' parameter varies by year:
 
-3) Two of the parameters are vectors (1x20 dimensions) that vary by year, but not by stage:
-- g
-- pi
+-   pi.mu
+-   pi.sd
+-   g.mu
+-   g.sd
 
-4) Four of the parameters are matrices (3x20 dimensions) that vary by both stage and year:
-- s
-- F
-- r
-- p
+2)  Vector hyper-priors (1x3 dimensions) that vary by stage (their parents vary by stage and year):
 
+-   s.mu
+-   s.sd
+-   F.mu
+-   F.sd
+-   r.mu
+-   r.sd
+-   p.mu
+-   p.sd
 
+3)  Two of the parameters are vectors (1x20 dimensions) that vary by year, but not by stage:
+
+-   g
+-   pi
+
+4)  Four of the parameters are matrices (3x20 dimensions) that vary by both stage and year:
+
+-   s
+-   F
+-   r
+-   p
 
 On the left hand side of the html document should be a table of contents. Refer to this to jump to the relevant sections.
 
@@ -76,12 +81,14 @@ library(patchwork)
 ```
 
 # Helper functions
+
 These will be used throughout the script, but I'm stashing them all here so they don't reduce the flow of the script.
 
 ## Import functions
 
 ### Import all true simulated parameters
-Function to to pull in all the saved RDS files and grab all the relevant information.   
+
+Function to to pull in all the saved RDS files and grab all the relevant information.
 
 ```{r}
 process_simulation_outputs <- function(paths) {
@@ -145,8 +152,10 @@ process_simulation_outputs <- function(paths) {
 }
 ```
 
-### Import JAGS output 
+### Import JAGS output
+
 Function to import data from all fit JAGS models, separated by run number and parameter names.
+
 ```{r}
 read_func<-function(paths){
   # Helper: extract the first integer sequence in the filename
@@ -165,9 +174,7 @@ read_func<-function(paths){
 
 ### Plot bias for one specified parameter that varies by stage but not year
 
-*** Break this function (and the rmse next) up for vectors that vary by year vs stage. The stage-based vectors will use the 'index' variable, and the annual variation (pi, g) parameters will use year and NOT index.
-
-
+\*\*\* Break this function (and the rmse next) up for vectors that vary by year vs stage. The stage-based vectors will use the 'index' variable, and the annual variation (pi, g) parameters will use year and NOT index.
 
 This function takes a parameter name and the objects containing true parameters and estimated parameters and returns a plot showing the bias between the true and estimated values, back-transformed to the real scale.
 
@@ -200,7 +207,7 @@ plot_bias_violin_one <- function(param_name, model_df, true_parameters, exclude_
   
   comp_df <- left_join(est_df, truth_df, by = c("run", "index")) %>%
     mutate(bias = plogis(mean) - plogis(truth),
-           rmse=sqrt(sd^2+bias^2))
+            rmse=sqrt(sd^2+bias^2))
   
   ci_emp <- comp_df %>%
     group_by(index) %>%
@@ -239,12 +246,9 @@ plot_bias_violin_one <- function(param_name, model_df, true_parameters, exclude_
 }
 ```
 
-
-
 ### Plot RMSE for one specified parameter that varies by stage but not year
 
 This function takes a parameter name and the objects containing true parameters and estimated parameters and returns a plot showing the RMSE between the true and estimated values, back-transformed to the real scale.
-
 
 ```{r}
 plot_rmse_violin_one<- function(param_name, model_df, true_parameters, exclude_params=NULL) {
@@ -275,7 +279,7 @@ plot_rmse_violin_one<- function(param_name, model_df, true_parameters, exclude_p
   
   comp_df <- left_join(est_df, truth_df, by = c("run", "index")) %>%
     mutate(bias = plogis(mean) - plogis(truth),
-         rmse=sqrt(sd^2)+bias^2)
+           rmse=sqrt(sd^2+bias^2))
   
   ci_emp_rmse <- comp_df %>%
     group_by(index) %>%
@@ -359,10 +363,10 @@ plot_rmse_violin_grid <- function(param_names, model_df, true_parameters,
 }
 ```
 
-
-### Plot bias for parameters that vary by year AND stage (3x20 matrices)
+### Bias for parameters that vary by year AND stage (3x20 matrices)
 
 First a function to summarise bias and 95% CIs
+
 ```{r}
 summarise_matrix_bias <- function(param_name, model_df, true_parameters) {
   df_mat <- model_df %>%
@@ -396,11 +400,10 @@ summarise_matrix_bias <- function(param_name, model_df, true_parameters) {
 }
 ```
 
-
-
 Now a plotting function for the output of summarise_matrix_bias()
+
 ```{r}
-plot_matrix_violins <- function(param_name, model_df, true_parameters) 
+plot_matrix_bias_violins <- function(param_name, model_df, true_parameters) 
   {
   out  <- summarise_matrix_bias(param_name, model_df, true_parameters)
   comp <- out$comp
@@ -415,7 +418,7 @@ plot_matrix_violins <- function(param_name, model_df, true_parameters)
   
   
   ggplot(comp, aes(x = factor(col), y = bias)) +
-    geom_violin(trim = FALSE, fill = "lightblue") +
+    geom_violin(trim = T, fill = "lightblue") +
     stat_summary(fun = median, geom = "point", color = "black", size = 2) +
     geom_linerange(
       data        = ci,
@@ -430,41 +433,119 @@ plot_matrix_violins <- function(param_name, model_df, true_parameters)
       x     = "Year",
       y     = "Bias (estimated mean – truth)"
     ) +
-    theme_minimal()
+    theme_minimal()+
+    theme(
+      strip.text = element_text(size=16, face='bold')
+    )
 }
 ```
 
+### RMSE for parameters that vary by year AND stage (3x20 matrices)
 
+A function to summarize rmse and 95% CIs
 
+```{r}
+summarise_matrix_rmse <- function(param_name, model_df, true_parameters) {
+  df_mat <- model_df %>%
+    # only keep rows like "s[1,1]" if param_name=="s"
+    filter(str_detect(param, paste0("^", param_name, "\\["))) %>%
+    extract(
+      col     = param,
+      into    = c("param_name", "row", "col"),
+      regex   = "^(\\w+)\\[(\\d+),(\\d+)\\]$",
+      convert = TRUE
+    ) %>%
+    select(run, row, col, mean, sd)
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    rename(row = row, col = col, truth = value)
+  
+  comp <- df_mat %>%
+    left_join(truth_df, by = c("run","row","col")) %>%
+    mutate(bias = mean - truth,
+           rmse=sqrt(sd^2+bias^2))
+  
+  ci <- comp %>%
+    group_by(row, col) %>%
+    summarise(
+       lower = quantile(rmse, 0.025, na.rm = TRUE),
+       upper = quantile(rmse, 0.975, na.rm = TRUE),
+       med   = median(rmse, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  list(comp = comp, ci = ci)
+}
+```
 
+Now a plotting function for the output of summarise_matrix_rmse()
+
+```{r}
+plot_matrix_rmse_violins <- function(param_name, model_df, true_parameters) 
+  {
+  out  <- summarise_matrix_rmse(param_name, model_df, true_parameters)
+  comp <- out$comp
+  ci   <- out$ci
+  
+  # index -> stage mapping
+  stage_labels <- as_labeller(c(
+    `1` = "Juvenile",
+    `2` = "Subadult",
+    `3` = "Adult"
+  ))
+  
+  
+  ggplot(comp, aes(x = factor(col), y = rmse)) +
+    geom_violin(trim = T, fill = "lightblue") +
+    stat_summary(fun = median, geom = "point", color = "black", size = 2) +
+    geom_linerange(
+      data        = ci,
+      inherit.aes = FALSE,
+      aes(x = factor(col), ymin = lower, ymax = upper),
+      linewidth   = 1, color = "darkblue"
+    ) +
+    geom_hline(yintercept = 0, color = "red") +
+    facet_wrap(~ row, labeller=stage_labels) +
+    labs(
+      title = paste0("RMSE of ‘", param_name, "’"),
+      x     = "Year",
+      y     = "RMSE "
+    ) +
+    theme_minimal()+
+    theme(
+      strip.text = element_text(size=16, face='bold')
+    )
+}
+```
 
 # Import simulated true parameters (saved during pipeline)
 
 Collect all file paths to saved RDS files containing lists of simulated true parameter values.
+
 ```{r}
 truth_files<-list.files(path=here("output/MSI_output/Jan_2026_lefkovitch/true_params"), pattern="*.rds", full.names = T)
 ```
 
-
 Extract info from rds files and combine everything into a list separated by parameter names.
+
 ```{r}
 true_parameters<-process_simulation_outputs(truth_files)
 ```
-
 
 # Data Wrangling simulated true parameters
 
 All the simulated parameters were stored in big messy lists, but for the sake of combining with estimated data, I'll need to convert everything into a tidy dataframe.
 
 Keep track of different dimension parameters for subsequent filtering
+
 ```{r}
 scalar_params <- c("pi.mu", "pi.sd", "g.mu", "g.sd") 
 vector_params <- c("s.mu","s.sd","F.mu","F.sd","r.mu","r.sd","p.mu","p.sd", "pi", "g")
 matrix_params <- c("s","F","r","p")
 ```
 
-
 Get a logical index of names to filter from. The 'true_parameters' object is a giant list of all the simulated true parameter values.
+
 ```{r}
 vec_names<-names(true_parameters)%in%vector_params
 matrix_names<-names(true_parameters)%in%matrix_params
@@ -472,6 +553,7 @@ scalar_names<-names(true_parameters)%in%scalar_params
 ```
 
 Split up big single list of true parameters into categories of scalars, vectors, and matrices.
+
 ```{r}
 true_vec_list <- true_parameters[vec_names]
 truth_matrix_list <- true_parameters[matrix_names]
@@ -479,20 +561,18 @@ truth_scalars<-true_parameters[scalar_names]
 ```
 
 Hypers for pi and g don't have 3 separate indices for stage, and don't vary by year, just a single value per run. To keep track that this is a simulated true value, I"ll change the actual estimate variable to one called 'truth'.
+
 ```{r}
 truth_scalars_df<-bind_rows(truth_scalars, .id="param")%>%
   rename(truth = value)
 ```
 
+There are 2 different sets of dimensions to the vector parameters. Hyperpriors for the parameters that vary by stage are 3x1 vectors, with the 'index' variable keeping track of stage. The parameters for 'g' and 'pi' are 20x1 vectors, with the 'index' variable keeping track of year.
 
-There are 2 different sets of dimensions to the vector parameters. 
-Hyperpriors for the parameters that vary by stage are 3x1 vectors, with the 'index' variable keeping track of stage.
-The parameters for 'g' and 'pi' are 20x1 vectors, with the 'index' variable keeping track of year.
-
- 
 It probably makes sense to keep index only as a variable for the different stages, and only use year for time-varying parameters.
 
 First I'll parse out the hyperpriors that only vary by stage.
+
 ```{r}
 hyper_vec_list<-c("s.mu","s.sd","F.mu","F.sd","r.mu","r.sd","p.mu","p.sd")
 
@@ -503,6 +583,7 @@ truth_hyper_vec_df<-bind_rows(true_vec_list, .id="param") %>%
 ```
 
 Now only by year. I'll rename index to year (because that is what it's representing), and give it another variable called index that is NA for record-keeping.
+
 ```{r}
 yearly_vec_list<-c("pi", "g")
 
@@ -514,23 +595,24 @@ truth_year_vec_df<-bind_rows(true_vec_list, .id="param") %>%
 ```
 
 Combine the two kinds of vector parameters
+
 ```{r}
 truth_vec_df<-bind_rows(truth_hyper_vec_df, truth_year_vec_df)
 ```
 
-
 Parameters with 3x20 matrix for age variation plus temporal variation (20 years)
+
 ```{r}
 truth_matrix_df<-bind_rows(truth_matrix_list, .id="param") %>% 
   rename(index=row, year=col, truth=value)
 ```
 
----
+------------------------------------------------------------------------
 
 # Import estimated model parameters from fitted JAGS models (saved during pipeline)
 
-
 Grab file paths for all model output saved as a .csv file from each JAGS model.
+
 ```{r}
 model_summary_files<-list.files(path=here("output/MSI_output/Jan_2026_lefkovitch/model_results"),
                                 pattern="model_summary_simulation_run_.*\\.csv", 
@@ -538,20 +620,20 @@ model_summary_files<-list.files(path=here("output/MSI_output/Jan_2026_lefkovitch
 ```
 
 Use pre-defined function to import all csv files and consolidate into a single dataframe that keeps track of model run number and parameter names. (as_tibble output suppressed)
+
 ```{r, include=F}
 model_df<-map_dfr(model_summary_files, read_func) %>% 
   as_tibble()
 ```
 
----
-
+------------------------------------------------------------------------
 
 # Data Wrangling to join simulated true parameters to estimated model output
 
 ### Join truth and estimated values for scalars
 
-Join scalar true parameters with estimated parameters. They don't vary by year or stage, single value per run.
-Probably makes more sense to code index as NA, since the scalars are for all stages instead of a single one, than give it a numeric value.
+Join scalar true parameters with estimated parameters. They don't vary by year or stage, single value per run. Probably makes more sense to code index as NA, since the scalars are for all stages instead of a single one, than give it a numeric value.
+
 ```{r}
 # estimated
 scalar_est<-model_df %>% 
@@ -567,7 +649,6 @@ comp_scalar<-scalar_est %>%
   mutate(year=NA) %>% 
   distinct()
 ```
-
 
 ### Join truth and estimated values for vectors
 
@@ -597,6 +678,7 @@ est_vec_df<-bind_rows(est_hyper_vec_df, est_yearly_vec_df)
 ```
 
 Join estimated vectors with true vectors and also add in scalar df from previous chunk.
+
 ```{r}
 comp_vec <- left_join(est_vec_df, truth_vec_df, by = c("run", "index", "param", "year")) %>% 
   bind_rows(., comp_scalar) %>% 
@@ -604,10 +686,10 @@ comp_vec <- left_join(est_vec_df, truth_vec_df, by = c("run", "index", "param", 
   select(run, param, index, year, truth, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
 ```
 
-
 ### Join truth and estimated values for matrices
 
 Pull off indices from jags parameter names
+
 ```{r}
 est_matrix_df<-model_df %>% 
   extract(
@@ -620,26 +702,27 @@ est_matrix_df<-model_df %>%
   select(run, param, index, year, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
 ```
 
-
 Add truth values to matrix parameter dataframe
+
 ```{r}
 comp_mat <- left_join(est_matrix_df, truth_matrix_df) %>% 
   select(run, param, index, year, truth, mean, sd, X2.5., X50., X97.5., Rhat, n.eff)
 ```
 
-
 Combine full set of truth and estimated to compare
+
 ```{r}
 full_comp<-rbind.data.frame(comp_vec, comp_mat)
 ```
 
----
+------------------------------------------------------------------------
 
 # Plot coverages
 
 I'll visualize, for each parameter, the probability that 95% credible intervals from the JAGS output contain the true parameter. If I wanted to reduce the amount of code I could wrap this into a generalizable function, but for now I have a separate code chunk for each plot. I'll create approximate (Wald) CIs via standard errors. Since sample size is large it's ok to use normal approximation.
 
 Stage names for the legend
+
 ```{r}
 stage_names<-c(
   "1"="Juvenile",
@@ -649,6 +732,7 @@ stage_names<-c(
 ```
 
 Create intervals
+
 ```{r}
 param_coverage_approx <- full_comp %>% 
   mutate(covered = (truth >= X2.5.) & (truth <= X97.5.)) %>% 
@@ -671,6 +755,7 @@ param_coverage_approx <- full_comp %>%
 ## Main parameter coverage plots
 
 ### All main parameters coverage plot
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s', 'r', 'p', 'F')) %>% 
@@ -689,8 +774,8 @@ ggplot(., aes(param, coverage)) +
   labs(x="", y="Coverage\n")
 ```
 
-
 ### Survival coverage plot
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s')) %>% 
@@ -709,6 +794,7 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Dead recovery (Seber's r) parameters coverage plot
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('r')) %>% 
@@ -726,9 +812,10 @@ ggplot(., aes(param, coverage)) +
   labs(x="", y="Coverage\n")
 ```
 
-
 ### Live recovery (recapture) parameters coverage plot
+
 Juvenile recapture not estimated.
+
 ```{r}
 param_coverage_approx %>%
   filter(param%in%c('p')) %>%
@@ -742,10 +829,10 @@ ggplot(., aes(param, coverage)) +
   ggtitle('Coverage of live encounter (p) parameters')
 ```
 
-
 ## Hyperparameter coverage plots
 
 ### Coverage of all hyperparameters, no stage variation
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s.mu', 's.sd', 'r.mu', 'r.sd', 'F.mu', 'F.sd', 'p.mu', 'p.sd', 'g.mu', 'g.sd', 'pi.mu', 'pi.sd')) %>% 
@@ -764,6 +851,7 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Coverage of hyperparamers varying by stage
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s.mu', 's.sd', 'r.mu', 'r.sd', 'F.mu', 'F.sd', 'p.mu', 'p.sd')) %>% 
@@ -782,8 +870,8 @@ ggplot(., aes(param, coverage)) +
   labs(x="", y="Coverage\n")
 ```
 
-
 ### Survival hyperparameters plot (s.mu and s.sd), varying by stage
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s.mu', 's.sd')) %>% 
@@ -801,8 +889,8 @@ ggplot(., aes(param, coverage)) +
   labs(x="", y="Coverage\n")
 ```
 
-
 ### Dead recovery (Seber's r) hyperparameters plot (r.mu and r.sd), varying by stage
+
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('r.mu', 'r.sd')) %>% 
@@ -821,7 +909,9 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Live recovery (recapture) hyperparameters plot (p.mu and p.sd), varying by stage
+
 Juvenile recapture not estimated.
+
 ```{r}
 param_coverage_approx %>%
   filter(param%in%c('p.mu', 'p.sd')) %>%
@@ -836,6 +926,7 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Site fidelity hyperparameters plot (F.mu and F.sd), varying by stage
+
 ```{r}
 param_coverage_approx %>%
   filter(param%in%c('F.mu', 'F.sd')) %>%
@@ -849,6 +940,7 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Stage 'graduation' hyperparameters plot (g.mu and g.sd)
+
 ```{r}
 param_coverage_approx %>%
   filter(param%in%c('g.mu', 'g.sd')) %>%
@@ -861,6 +953,7 @@ ggplot(., aes(param, coverage)) +
 ```
 
 ### Pi latent mixture hyperparameters plot (pi.mu and pi.sd)
+
 ```{r}
 param_coverage_approx %>%
   filter(param%in%c('pi.mu', 'pi.sd')) %>%
@@ -872,25 +965,26 @@ ggplot(., aes(param, coverage)) +
   ggtitle('Coverage of pi latent mixture hyperparameters')
 ```
 
-
----
+------------------------------------------------------------------------
 
 # Plot bias and RMSE
 
 ## Bias of main parameters
 
-
 ### Survival bias
+
 ```{r}
-plot_matrix_violins('s', model_df = model_df, true_parameters = true_parameters)
+plot_matrix_bias_violins('s', model_df = model_df, true_parameters = true_parameters)
 ```
 
 ### Recovery bias
+
 ```{r}
-plot_matrix_violins('r', model_df = model_df, true_parameters = true_parameters)
+plot_matrix_bias_violins('r', model_df = model_df, true_parameters = true_parameters)
 ```
 
 ### Detection bias
+
 ```{r}
 # Easier to just trim out juveniles for detection instead of reworking the function
 df_filter<-model_df %>% 
@@ -899,17 +993,17 @@ df_filter<-model_df %>%
                      'p[1,11]', 'p[1,12]', 'p[1,13]', 'p[1,14]', 'p[1,15]',
                      'p[1,16]', 'p[1,17]', 'p[1,18]', 'p[1,19]', 'p[1,20]'))
 
-plot_matrix_violins('p', model_df = df_filter, true_parameters = true_parameters)
+plot_matrix_bias_violins('p', model_df = df_filter, true_parameters = true_parameters)
 ```
 
 ### Site fidelity bias
+
 ```{r}
-plot_matrix_violins('F', model_df = model_df, true_parameters = true_parameters)
+plot_matrix_bias_violins('F', model_df = model_df, true_parameters = true_parameters)
 ```
 
+## Bias of hyperparameters, varying by stage but not year
 
-
-## Bias of main hyperparameters, varying by stage but not year
 ```{r}
 mu_to_plot <- c("s.mu", "F.mu", "p.mu", "r.mu")
 plot_bias_violin_grid(mu_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
@@ -924,8 +1018,6 @@ plot_bias_violin_grid(sd_to_plot, model_df, true_parameters, exclude_params = c(
 
 These are varying by year but not stage, so the previous functions won't work.
 
-
-
 ```{r}
 
 
@@ -936,61 +1028,203 @@ These are varying by year but not stage, so the previous functions won't work.
 
 ```
 
+------------------------------------------------------------------------
 
+## RMSE of main parameters
 
+### Survival RMSE
 
-
----
-
-## RMSE 
-
-### RMSE of main hyperparameters
 ```{r}
+plot_matrix_rmse_violins('s', model_df, true_parameters)
+```
+
+### Recovery RMSE
+
+```{r}
+plot_matrix_rmse_violins('r', model_df, true_parameters)
+```
+
+### Detection RMSE
+
+```{r}
+# Easier to just trim out juveniles for detection instead of reworking the function
+df_filter<-model_df %>% 
+  filter(!param%in%c('p[1,1]',  'p[1,2]',  'p[1,3]',  'p[1,4]',  'p[1,5]',
+                     'p[1,6]',  'p[1,7]',  'p[1,8]',  'p[1,9]',  'p[1,10]',
+                     'p[1,11]', 'p[1,12]', 'p[1,13]', 'p[1,14]', 'p[1,15]',
+                     'p[1,16]', 'p[1,17]', 'p[1,18]', 'p[1,19]', 'p[1,20]'))
+plot_matrix_rmse_violins('p', df_filter, true_parameters)
+```
+
+### Site fidelity RMSE
+
+```{r}
+plot_matrix_rmse_violins('F', model_df, true_parameters)
+```
+
+### RMSE of hyperparameters
+
+```{r}
+mu_to_plot <- c("s.mu", "F.mu", "p.mu", "r.mu")
 plot_rmse_violin_grid(mu_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
 ```
 
+\`\`
+
+------------------------------------------------------------------------
+
+# Observed vs expected value plots
+
+
+## Main parameters
+
+Rename numeric index to text-based stage names
 ```{r}
-plot_rmse_violin_grid(sd_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
-```
----
-
-
-
-
-
-
-
-
-
-
-```{r}
-
-```
-
-
-
-
-
-
-```{r}
-
+full_comp<-full_comp %>% 
+  mutate(index=case_match(index,
+                      1 ~ "Juvenile",
+                      2 ~ "Subadult",
+                      3 ~ "Adult"))
 ```
 
 
-
-
-
-
-
-
+### Survival
 
 ```{r}
+ggplot(full_comp %>% filter(param == "s"), aes(x = truth, y = mean, color=factor(index))) +
+  geom_point(size = 2, color='gray20', alpha=0.2) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.2) +
+  facet_wrap(~year)+
+  geom_smooth(method = "lm")+
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True survival",
+    y = "Estimated survival",
+    color = "Stage"
+  ) +
+  theme_classic()
+```
+
+
+### Recovery
+
+```{r}
+ggplot(full_comp %>% filter(param == "r"), aes(x = truth, y = mean, color=factor(index))) +
+  geom_point(size = 2, color='gray20', alpha=0.2) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.2) +
+  facet_wrap(~year)+
+  geom_smooth(method = "lm")+
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True recovery",
+    y = "Estimated recovery",
+    color = "Stage"
+  ) +
+  theme_classic()
+```
+
+### Detection
+
+I'll first remove Juveniles because they don't have detection directly estimated. 
+
+```{r}
+# Also, because live encounter probabilities are indexed differently between the simulated datasets and the JAGS models, I’ll compare years 2-20 from the simulated (true) dataset and years 1-19 from the JAGS parameter estimates.
+
+# remove juveniles
+df_plot <- full_comp %>%
+  filter(!is.na(truth)) %>% 
+  filter(param%in%matrix_params) %>% 
+  filter(!(param=="p"&index=="Juvenile"))
+
+
+df_shift <- df_plot %>%
+  filter(param == "p") %>%
+  group_by(run, index) %>%
+  arrange(year, .by_group = TRUE) %>%
+  mutate(truth_next = lead(truth)) %>%  # truth at year t+1
+  ungroup()
+
+# keep only JAGS years 1..19 (so truth_next is 2..20)
+df_use <- df_shift %>%
+  filter(year >= 1, year <= 19)
+
+ggplot(df_use, aes(x = truth_next, y = mean, color = factor(index))) +
+  geom_point(size = 2, color = 'gray20', alpha = 0.5) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha = 0.5) +
+  facet_wrap(~year) +                 # facets show the JAGS year (1:19)
+  geom_smooth(method = "lm") +
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True detection (simulation years 2-20 shifted to 1-19)",
+    y = "Estimated detection (JAGS years 1-19)",
+    color = "Stage"
+  ) +
+  theme_classic()
 
 ```
 
 
-```{r}
 
+### Site Fidelity
+
+```{r}
+ggplot(full_comp %>% filter(param == "F"), aes(x = truth, y = mean, color=factor(index))) +
+  geom_point(size = 2, color='gray20', alpha=0.2) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.2) +
+  facet_wrap(~year)+
+  geom_smooth(method = "lm")+
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True site fidelity",
+    y = "Estimated site fidelity",
+    color = "Stage"
+  ) +
+  theme_classic()
+```
+
+## Hyperparameters, varying by stage but not year
+
+### mu hypers
+On the logit scale
+```{r}
+ggplot(full_comp %>% filter(param%in%c("s.mu", "F.mu", "p.mu", "r.mu")) %>% filter(!(param=="p.mu"&index=="Juvenile")), 
+       aes(x=truth, y=mean, color=factor(index)))+
+  facet_wrap(~param, scales="free")+
+  geom_point(size = 2, color='gray20', alpha=0.1) +
+  geom_smooth(method = "lm", alpha=1, linewidth=1.2)+
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
+  geom_abline(slope = 1, intercept = 0) +
+  theme_classic()
+```
+
+
+### sd hypers
+
+```{r}
+ggplot(full_comp %>% filter(param%in%c("s.sd", "F.sd", "p.sd", "r.sd")) %>% filter(!(param=="p.sd"&index=="Juvenile")), 
+       aes(x=truth, y=mean, color=factor(index)))+
+  facet_wrap(~param, scales="free")+
+  geom_point(size = 2, color='gray20', alpha=0.1) +
+  geom_smooth(method = "lm")+
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
+  geom_abline(slope = 1, intercept = 0) +
+  theme_classic()
+```
+
+
+## Hyperparameters, varying by year but not stage
+
+g and pi
+
+```{r}
+ggplot(full_comp %>% filter(param%in%c("pi.mu", "pi.sd", "g.mu", "g.sd")), 
+       aes(x=truth, y=mean))+
+  facet_wrap(~param, scales="free")+
+  geom_point(size = 2, color='gray20', alpha=0.1) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
+  geom_smooth(method = "lm")+
+  geom_abline(slope = 1, intercept = 0) +
+  theme_classic()
 ```
 
 
@@ -1004,7 +1238,26 @@ plot_rmse_violin_grid(sd_to_plot, model_df, true_parameters, exclude_params = c(
 
 
 
-```{r}
 
-```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+sessionInfo()
