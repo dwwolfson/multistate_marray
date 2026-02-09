@@ -14,9 +14,12 @@ editor_options:
   chunk_output_type: console
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+  tidy=TRUE,
+  tidy.opts=list(width.cutoff=75)) # Adjust the cutoff value as needed
 ```
+
 
 # Document intro
 
@@ -35,13 +38,13 @@ Diagnostic results include the following visualizations:\
 - Bias estimates (truth minus estimated parameter values)\
 - Precision estimates (coverage of credible intervals summarized across sampling runs vs truth)\
 - RMSE (mainly accuracy but also considers precision)\
-- Observed vs expected values 
+- Observed vs expected values \
 
 ### Model parameters
 
 There are 18 parameters that we simulated true values for. Twelve of the parameters are hyperpriors, of which there are two types.
 
-1)  Scalar hyper-priors that don't vary annually or by stage (although their 'parent' parameter varies by year:
+1)  Scalar hyper-priors that don't vary annually or by stage (although their 'parent' parameter varies by year):
 
 -   pi.mu
 -   pi.sd
@@ -71,13 +74,16 @@ There are 18 parameters that we simulated true values for. Twelve of the paramet
 -   r
 -   p
 
-On the left hand side of the html document should be a table of contents. Refer to this to jump to the relevant sections.
+\cr
+
+_NOTE_, on the left hand side of the html document should be a table of contents. Refer to this to jump to the relevant sections.
 
 ```{r, message=F, warning=F}
 library(tidyverse)
 library(here)
 library(gridExtra)
 library(patchwork)
+library(ggpubr)
 ```
 
 # Helper functions
@@ -239,10 +245,10 @@ plot_bias_violin_one <- function(param_name, model_df, true_parameters, exclude_
       x     = "Stage class",
       y     = "Bias"
     ) +
-    theme_minimal()+
     theme(plot.title=element_text(hjust=0.5),
-          axis.text.x=element_text(size=16))+
-          scale_x_discrete(labels=x_labels)  
+          axis.text.x=element_text(size=16)) +
+          scale_x_discrete(labels=x_labels) +
+  theme_pubr()
 }
 ```
 
@@ -310,16 +316,16 @@ plot_rmse_violin_one<- function(param_name, model_df, true_parameters, exclude_p
       x     = "Stage class",
       y     = "RMSE"
     ) +
-    theme_minimal()+
     theme(plot.title=element_text(hjust=0.5),
           axis.text.x=element_text(size=16))+
-          scale_x_discrete(labels=x_labels)  
+          scale_x_discrete(labels=x_labels)  +
+  theme_pubr()
 }
 ```
 
-### Plot bias for multiple parameters
+### Wrapper function for plotting bias with multiple parameters (that vary by stage but not year)
 
-This is a wrapper, using the previous function plot_bias_violin_one(), but allowing the visualization of multiple parameters. (Currently written with 2 parameters in mind because it displays with 2 columns.)
+This is a wrapper, using the previous function plot_bias_violin_one(), but allowing the visualization of multiple parameters. (Currently written with 2 or 4 parameters in mind because it displays with 2 columns.)
 
 ```{r}
 plot_bias_violin_grid <- function(param_names, model_df, true_parameters,
@@ -340,9 +346,9 @@ plot_bias_violin_grid <- function(param_names, model_df, true_parameters,
 }
 ```
 
-### Plot RMSE for multiple parameters
+### Wrapper function for plotting RMSE with multiple parameters (that vary by stage but not year)
 
-This is a wrapper, using the previous function plot_rmse_violin_one(), but allowing the visualization of multiple parameters. (Currently written with 2 parameters in mind because it displays with 2 columns.)
+This is a wrapper, using the previous function plot_rmse_violin_one(), but allowing the visualization of multiple parameters. (Currently written with 2 or 4 parameters in mind because it displays with 2 columns.)
 
 ```{r}
 plot_rmse_violin_grid <- function(param_names, model_df, true_parameters,
@@ -365,7 +371,7 @@ plot_rmse_violin_grid <- function(param_names, model_df, true_parameters,
 
 ### Bias for parameters that vary by year AND stage (3x20 matrices)
 
-First a function to summarise bias and 95% CIs
+First a function to summarise bias and 95% CIs. Backtransformed to the real scale.
 
 ```{r}
 summarise_matrix_bias <- function(param_name, model_df, true_parameters) {
@@ -385,7 +391,7 @@ summarise_matrix_bias <- function(param_name, model_df, true_parameters) {
   
   comp <- df_mat %>%
     left_join(truth_df, by = c("run","row","col")) %>%
-    mutate(bias = mean - truth)
+    mutate(bias = plogis(mean) - plogis(truth))
   
   ci <- comp %>%
     group_by(row, col) %>%
@@ -442,7 +448,7 @@ plot_matrix_bias_violins <- function(param_name, model_df, true_parameters)
 
 ### RMSE for parameters that vary by year AND stage (3x20 matrices)
 
-A function to summarize rmse and 95% CIs
+A function to summarize rmse and 95% CIs, backtransformed to the real scale.
 
 ```{r}
 summarise_matrix_rmse <- function(param_name, model_df, true_parameters) {
@@ -462,7 +468,7 @@ summarise_matrix_rmse <- function(param_name, model_df, true_parameters) {
   
   comp <- df_mat %>%
     left_join(truth_df, by = c("run","row","col")) %>%
-    mutate(bias = mean - truth,
+    mutate(bias = plogis(mean) - plogis(truth),
            rmse=sqrt(sd^2+bias^2))
   
   ci <- comp %>%
@@ -478,7 +484,7 @@ summarise_matrix_rmse <- function(param_name, model_df, true_parameters) {
 }
 ```
 
-Now a plotting function for the output of summarise_matrix_rmse()
+Now a plotting function for the output of summarise_matrix_rmse(), backtransformed to the real scale.
 
 ```{r}
 plot_matrix_rmse_violins <- function(param_name, model_df, true_parameters) 
@@ -517,6 +523,227 @@ plot_matrix_rmse_violins <- function(param_name, model_df, true_parameters)
     )
 }
 ```
+
+
+### Bias for parameters that vary by year but NOT stage (e.g., g and pi)
+
+A function to summarise the parameter(s) of interest and create 95% CI, backtransformed to the real scale.
+```{r}
+summarise_vec_bias <- function(param_name, model_df, true_parameters) {
+  df_vec <- model_df %>%
+    filter(str_detect(param, paste0("^", param_name, "\\["))) %>%
+      extract(
+      col     = param,
+      into    = "year",
+      regex   = "\\[(\\d+)\\]",
+      convert = TRUE
+    ) %>%
+    select(run, year, mean, sd)
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    rename(year = index, truth = value)
+  
+  comp <- df_vec %>%
+    left_join(truth_df, by = c("run","year")) %>%
+    mutate(bias = plogis(mean) - plogis(truth))
+  
+  ci <- comp %>%
+    group_by(year) %>%
+    summarise(
+       lower = quantile(bias, 0.025, na.rm = TRUE),
+       upper = quantile(bias, 0.975, na.rm = TRUE),
+       med   = median(bias, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  list(comp = comp, ci = ci)
+}
+```
+
+And a function to plot the output of summarise_vec_bias(), backtransformed to the real scale.
+```{r}
+plot_vector_bias_violins <- function(param_name, model_df, true_parameters) {
+
+  out  <- summarise_vec_bias(param_name, model_df, true_parameters)
+  comp <- out$comp
+  ci   <- out$ci
+
+  ggplot(comp, aes(x = factor(year), y = bias)) +
+
+    geom_violin(trim = TRUE, fill = "lightblue") +
+
+    stat_summary(fun = median, geom = "point",
+                 color = "black", size = 2) +
+
+    geom_linerange(
+      data        = ci,
+      inherit.aes = FALSE,
+      aes(x = factor(year), ymin = lower, ymax = upper),
+      linewidth   = 1,
+      color       = "darkblue"
+    ) +
+
+    geom_hline(yintercept = 0, color = "red") +
+
+    labs(
+      title = paste0("Bias of '", param_name, "'"),
+      x     = "Year",
+      y     = "Bias"
+    ) +
+
+    theme_pubr()
+}
+```
+
+
+### RMSE for parameters that vary by year but NOT stage (g and pi)
+
+A function to summarise the parameter(s) of interest and create 95% CI, backtransformed to the real scale.
+```{r}
+summarise_vec_rmse <- function(param_name, model_df, true_parameters) {
+  df_vec <- model_df %>%
+    filter(str_detect(param, paste0("^", param_name, "\\["))) %>%
+      extract(
+      col     = param,
+      into    = "year",
+      regex   = "\\[(\\d+)\\]",
+      convert = TRUE
+    ) %>%
+    select(run, year, mean, sd)
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    rename(year = index, truth = value)
+  
+  comp <- df_vec %>%
+    left_join(truth_df, by = c("run","year")) %>%
+    mutate(bias = plogis(mean) - plogis(truth),
+           rmse = sqrt(sd^2 + bias^2))
+  
+  ci <- comp %>%
+    group_by(year) %>%
+    summarise(
+       lower = quantile(rmse, 0.025, na.rm = TRUE),
+       upper = quantile(rmse, 0.975, na.rm = TRUE),
+       med   = median(rmse, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  list(comp = comp, ci = ci)
+}
+```
+
+And a function to plot the output of summarise_vec_bias(), backtransformed to the real scale.
+```{r}
+plot_vector_rmse_violins <- function(param_name, model_df, true_parameters) {
+
+  out  <- summarise_vec_rmse(param_name, model_df, true_parameters)
+  comp <- out$comp
+  ci   <- out$ci
+
+  ggplot(comp, aes(x = factor(year), y = rmse)) +
+
+    geom_violin(trim = TRUE, fill = "lightblue") +
+
+    stat_summary(fun = median, geom = "point",
+                 color = "black", size = 2) +
+
+    geom_linerange(
+      data        = ci,
+      inherit.aes = FALSE,
+      aes(x = factor(year), ymin = lower, ymax = upper),
+      linewidth   = 1,
+      color       = "darkblue"
+    ) +
+
+    geom_hline(yintercept = 0, color = "red") +
+
+    labs(
+      title = paste0("RMSE of '", param_name, "'"),
+      x     = "Year",
+      y     = "RMSE"
+    ) +
+
+    theme_pubr()
+}
+```
+
+### Bias for scalar hyperparameters
+
+```{r}
+  summarise_scalar_bias<-function(param_name, model_df, true_parameters){
+  
+  
+  truth_df <- true_parameters[[param_name]] %>%
+    select(run, value) %>% # don't need index because they have the same value for all 3 indices
+    rename(truth = value) %>% 
+    distinct()
+  
+  est_df <- model_df %>%
+    filter(param == param_name) %>%
+    select(run, mean, sd, X2.5., X97.5.)
+  
+  comp_df <- left_join(est_df, truth_df, by = c("run")) %>%
+    mutate(bias = plogis(mean) - plogis(truth))
+  
+  ci_emp <- comp_df %>%
+    summarise(
+      lower = quantile(bias, 0.025, na.rm = TRUE),
+      upper = quantile(bias, 0.975, na.rm = TRUE),
+      med   = median(bias, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+    list(comp_df = comp_df, ci_emp = ci_emp)
+
+  }
+
+# Now the plotting function for a single parameter
+plot_bias_violin_scalar <- function(param_name, model_df, true_parameters) {
+  
+   out <- summarise_scalar_bias(param_name, model_df, true_parameters)
+    comp_df <- out$comp_df
+    ci_emp  <- out$ci_emp
+  
+  
+  ggplot(comp_df, aes(x = "", y = bias)) +
+    geom_violin(trim = T, fill = "lightgreen", color=NA) +
+    geom_linerange(
+      data        = ci_emp,
+      inherit.aes = FALSE,
+      aes(x = "", ymin = lower, ymax = upper),
+      linewidth   = 1.2,
+      color       = "darkgreen"
+    ) +
+    stat_summary(fun = median, geom = "point", color = "white", size = 3) +
+    geom_hline(yintercept = 0, color = "red") +
+    labs(
+      title = paste0("Bias for ‘", param_name, "’"),
+      x     = NULL,
+      y     = "Bias"
+    ) +
+    theme(plot.title=element_text(hjust=0.5)) +
+  theme_pubr()
+}
+
+# Now the wrapper for multiple parameters
+plot_bias_violin_scalars_grid <- function(param_names, model_df, true_parameters,
+                                  ncol = 2)  # number of columns in the grid
+                                   {
+  # generate one plot per parameter
+  plot_list <- lapply(param_names, function(p) {
+    plot_bias_violin_scalar(p, model_df, true_parameters)
+  })
+  
+  # arrange them in a grid
+  grid_obj <- do.call(grid.arrange,
+                      c(plot_list, ncol = ncol))
+  
+  # Return invisibly so that you can capture it if desired
+  invisible(grid_obj)
+}
+```
+
+
 
 # Import simulated true parameters (saved during pipeline)
 
@@ -734,9 +961,11 @@ stage_names<-c(
 Create intervals
 
 ```{r}
+
+# for parameters in which the variable index represents the 3 stages
 param_coverage_approx <- full_comp %>% 
   mutate(covered = (truth >= X2.5.) & (truth <= X97.5.)) %>% 
-  group_by(param) %>% 
+  group_by(param, index) %>% 
   summarise(
     index = index,
     coverage = mean(covered),
@@ -750,6 +979,26 @@ param_coverage_approx <- full_comp %>%
   ) %>% 
   suppressWarnings() %>% 
   distinct()
+
+# for the parameters g and pi, which have NA's for index and instead vary by year
+other_params_coverage<-full_comp %>% 
+  filter(param%in%c("g","pi")) %>% 
+  mutate(covered = (truth >= X2.5.) & (truth <= X97.5.)) %>% 
+  group_by(param, year) %>% 
+  summarise(
+    year = year,
+    coverage = mean(covered),
+    n        = n(),
+    .groups="keep"
+  ) %>% 
+  mutate(
+    se       = sqrt(coverage * (1 - coverage) / n),
+    ci_lower = coverage - 1.96 * se,
+    ci_upper = coverage + 1.96 * se
+  ) %>% 
+  suppressWarnings() %>% 
+  distinct()
+
 ```
 
 ## Main parameter coverage plots
@@ -829,32 +1078,53 @@ ggplot(., aes(param, coverage)) +
   ggtitle('Coverage of live encounter (p) parameters')
 ```
 
-## Hyperparameter coverage plots
+## Coverage of parameters (pi and g) that vary by year but not stage
 
-### Coverage of all hyperparameters, no stage variation
+### coverage of g parameter
 
 ```{r}
-param_coverage_approx %>% 
-  filter(param%in%c('s.mu', 's.sd', 'r.mu', 'r.sd', 'F.mu', 'F.sd', 'p.mu', 'p.sd', 'g.mu', 'g.sd', 'pi.mu', 'pi.sd')) %>% 
-ggplot(., aes(param, coverage)) +
-  #facet_wrap(~index, labeller=as_labeller(stage_names)) +
+other_params_coverage %>% 
+  filter(param%in%c('g')) %>% 
+ggplot(., aes(year, coverage)) +
   geom_point() +
   geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
   geom_hline(yintercept = 0.95, color = "red") +
   theme_minimal()+
-  ggtitle('Coverage of hyperparameters, consolidated by stage')+
+  ggtitle('Coverage of g parameter estimates by year')+
   theme(plot.title = element_text(hjust = 0.5, size = 16),
         axis.text=element_text(size=16),
         strip.text=element_text(size=16),
         axis.title.y=element_text(size=16))+
-  labs(x="", y="Coverage\n")
+  labs(x="Year", y="Coverage\n")
 ```
 
-### Coverage of hyperparamers varying by stage
+### coverage of pi parameter
+
+```{r}
+other_params_coverage %>% 
+  filter(param%in%c('pi')) %>% 
+ggplot(., aes(year, coverage)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_hline(yintercept = 0.95, color = "red") +
+  theme_minimal()+
+  ggtitle('Coverage of pi parameter estimates by year')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        axis.text=element_text(size=16),
+        strip.text=element_text(size=16),
+        axis.title.y=element_text(size=16))+
+  labs(x="Year", y="Coverage\n")
+```
+
+
+## Hyperparameter coverage plots
+
+### Coverage of all hyperparamers varying by stage
 
 ```{r}
 param_coverage_approx %>% 
   filter(param%in%c('s.mu', 's.sd', 'r.mu', 'r.sd', 'F.mu', 'F.sd', 'p.mu', 'p.sd')) %>% 
+  filter(!(param%in%c('p.mu','p.sd')&index==1)) %>% 
 ggplot(., aes(param, coverage)) +
   facet_wrap(~index, labeller=as_labeller(stage_names)) +
   geom_point() +
@@ -967,7 +1237,7 @@ ggplot(., aes(param, coverage)) +
 
 ------------------------------------------------------------------------
 
-# Plot bias and RMSE
+# Plot bias
 
 ## Bias of main parameters
 
@@ -1014,21 +1284,21 @@ sd_to_plot <- c("s.sd", "F.sd", "p.sd", "r.sd")
 plot_bias_violin_grid(sd_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
 ```
 
-### Bias of g and pi parameters
+## Bias of parameters (g and pi) that vary by year but not by stage
 
-These are varying by year but not stage, so the previous functions won't work.
-
+### Bias of g parameter
 ```{r}
-
-
-
-
-
-
-
+plot_vector_bias_violins('g', model_df, true_parameters)
 ```
 
+### Bias of pi parameter
+```{r}
+plot_vector_bias_violins('pi', model_df, true_parameters)
+```
+
+
 ------------------------------------------------------------------------
+# Plot RMSE
 
 ## RMSE of main parameters
 
@@ -1062,14 +1332,34 @@ plot_matrix_rmse_violins('p', df_filter, true_parameters)
 plot_matrix_rmse_violins('F', model_df, true_parameters)
 ```
 
-### RMSE of hyperparameters
+## RMSE of parameters (g and pi) that vary by year but not by stage
 
+### RMSE of g paramter
 ```{r}
-mu_to_plot <- c("s.mu", "F.mu", "p.mu", "r.mu")
-plot_rmse_violin_grid(mu_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
+plot_vector_rmse_violins('g', model_df, true_parameters)
 ```
 
-\`\`
+### RMSE of pi parameter
+
+```{r}
+plot_vector_rmse_violins('pi', model_df, true_parameters)
+```
+
+
+## RMSE of hyperparameters
+
+### RMSE of 4 main model variables, varying by stage, not by year
+
+```{r}
+
+mu_to_plot <- c("s.mu", "F.mu", "p.mu", "r.mu")
+plot_rmse_violin_grid(mu_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
+
+sd_to_plot <- c("s.sd", "F.sd", "p.sd", "r.sd")
+plot_rmse_violin_grid(sd_to_plot, model_df, true_parameters, exclude_params = c("p.mu[1]", "p.sd[1]"), ncol = 2)
+```
+
+
 
 ------------------------------------------------------------------------
 
@@ -1101,8 +1391,8 @@ ggplot(full_comp %>% filter(param == "s"), aes(x = truth, y = mean, color=factor
     x = "True survival",
     y = "Estimated survival",
     color = "Stage"
-  ) +
-  theme_classic()
+  )  +
+  theme_pubr()
 ```
 
 
@@ -1119,8 +1409,8 @@ ggplot(full_comp %>% filter(param == "r"), aes(x = truth, y = mean, color=factor
     x = "True recovery",
     y = "Estimated recovery",
     color = "Stage"
-  ) +
-  theme_classic()
+  )  +
+  theme_pubr()
 ```
 
 ### Detection
@@ -1158,8 +1448,8 @@ ggplot(df_use, aes(x = truth_next, y = mean, color = factor(index))) +
     x = "True detection (simulation years 2-20 shifted to 1-19)",
     y = "Estimated detection (JAGS years 1-19)",
     color = "Stage"
-  ) +
-  theme_classic()
+  )  +
+  theme_pubr()
 
 ```
 
@@ -1178,11 +1468,48 @@ ggplot(full_comp %>% filter(param == "F"), aes(x = truth, y = mean, color=factor
     x = "True site fidelity",
     y = "Estimated site fidelity",
     color = "Stage"
-  ) +
-  theme_classic()
+  )  +
+  theme_pubr()
 ```
 
-## Hyperparameters, varying by stage but not year
+## Parameters (g and pi) that vary by year, but not by stage
+
+### g parameter (proportion that graduate from subadult to adult)
+
+```{r}
+ggplot(full_comp %>% filter(param == "g"), aes(x = truth, y = mean)) +
+  geom_point(size = 2, color='gray20', alpha=0.1) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
+  facet_wrap(~year) +  
+  geom_smooth(method = "lm")+
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True graduation",
+    y = "Estimated graduation",
+    color = "Age class"
+  )  +
+  theme_pubr()
+```
+
+### pi parameter (proportion of individuals marked as adults that are subadults at time of banding)
+
+```{r}
+ggplot(full_comp %>% filter(param == "pi"), aes(x = truth, y = mean)) +
+  geom_point(size = 2, color='gray20', alpha=0.1) +
+  geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
+  geom_smooth(method = "lm")+
+  facet_wrap(~year)+
+  geom_abline(slope = 1, intercept = 0) +
+  labs(
+    x = "True subadult proportion",
+    y = "Estimated subadult proportion",
+  )  +
+  theme_pubr()
+```
+
+
+
+## Hyperparameters of 4 main model variables, varying by stage but not year
 
 ### mu hypers
 On the logit scale
@@ -1191,16 +1518,18 @@ ggplot(full_comp %>% filter(param%in%c("s.mu", "F.mu", "p.mu", "r.mu")) %>% filt
        aes(x=truth, y=mean, color=factor(index)))+
   facet_wrap(~param, scales="free")+
   geom_point(size = 2, color='gray20', alpha=0.1) +
-  geom_smooth(method = "lm", alpha=1, linewidth=1.2)+
+  geom_smooth(method = "lm")+
   geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
   geom_abline(slope = 1, intercept = 0) +
-  theme_classic()
+  labs(color="Stage")+
+  theme_pubr()
 ```
 
 
 ### sd hypers
 
 ```{r}
+library(ggpubr)
 ggplot(full_comp %>% filter(param%in%c("s.sd", "F.sd", "p.sd", "r.sd")) %>% filter(!(param=="p.sd"&index=="Juvenile")), 
        aes(x=truth, y=mean, color=factor(index)))+
   facet_wrap(~param, scales="free")+
@@ -1208,11 +1537,12 @@ ggplot(full_comp %>% filter(param%in%c("s.sd", "F.sd", "p.sd", "r.sd")) %>% filt
   geom_smooth(method = "lm")+
   geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
   geom_abline(slope = 1, intercept = 0) +
-  theme_classic()
+  labs(color="Stage")+
+  theme_pubr()
 ```
 
 
-## Hyperparameters, varying by year but not stage
+## Hyperparameters of g and pi, not varying by stage or year
 
 g and pi
 
@@ -1224,40 +1554,14 @@ ggplot(full_comp %>% filter(param%in%c("pi.mu", "pi.sd", "g.mu", "g.sd")),
   geom_errorbar(aes(ymin = X2.5., ymax = X97.5.), width = 0.01, alpha=0.1) +
   geom_smooth(method = "lm")+
   geom_abline(slope = 1, intercept = 0) +
-  theme_classic()
+  theme_pubr()
+```
+
+
+```{r}
+sessionInfo()
 ```
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-sessionInfo()
